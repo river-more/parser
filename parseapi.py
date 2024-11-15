@@ -265,3 +265,83 @@ def unpivot(
                 new_rows.append(new_row)
 
     return Table(new_schema, new_rows)
+
+
+def aggregate(table, group_by_columns, aggregates):
+    """
+    Perform an aggregation on a table.
+    :param table: Input Table object.
+    :param group_by_columns: List of column names to group by.
+    :param aggregates: Dictionary where keys are output column names and values are functions or expressions 
+                       (e.g., {"Total_Sales": ("Sales", sum)}).
+    :return: A new Table containing the aggregated results.
+    """
+    # Validate group_by_columns
+    for col in group_by_columns:
+        if col not in table.schema:
+            logging.error(f"Group by column '{col}' not found in the table schema.")
+            return None
+
+    # Validate aggregate columns
+    for agg_name, (agg_col, _) in aggregates.items():
+        if agg_col not in table.schema:
+            logging.error(f"Aggregate column '{agg_col}' not found in the table schema.")
+            return None
+
+    # Create a dictionary to hold grouped data
+    grouped_data = {}
+    group_indices = [table.schema.index(col) for col in group_by_columns]
+
+    for row in table.rows:
+        # Create a tuple key for the group
+        group_key = tuple(row[idx] for idx in group_indices)
+
+        # Initialize the group if not already present
+        if group_key not in grouped_data:
+            grouped_data[group_key] = {agg_name: [] for agg_name in aggregates.keys()}
+
+        # Append values to aggregate lists
+        for agg_name, (agg_col, _) in aggregates.items():
+            grouped_data[group_key][agg_name].append(row[table.schema.index(agg_col)])
+
+    # Perform aggregation computations
+    result_rows = []
+    for group_key, agg_data in grouped_data.items():
+        # Compute aggregated values
+        agg_results = []
+        for agg_name, (agg_col, agg_func) in aggregates.items():
+            agg_results.append(agg_func(agg_data[agg_name]))
+
+        # Combine group key and aggregated values
+        result_rows.append(list(group_key) + agg_results)
+
+    # Create the result schema
+    result_schema = group_by_columns + list(aggregates.keys())
+
+    return Table(result_schema, result_rows)
+
+def cross_join(table1, table2, condition=None):
+    """
+    Perform a cross join between two tables with an optional condition.
+    :param table1: The first Table object.
+    :param table2: The second Table object.
+    :param condition: A lambda function that takes two rows and returns True if the row pair satisfies the condition.
+                      Example: lambda row1, row2: row1[0] == row2[0]  # Join on ID
+    :return: A new Table containing the result of the cross join.
+    """
+    # Validate input
+    if not table1.rows or not table2.rows:
+        logging.error("One or both tables have no rows.")
+        return None
+
+    # Combine schemas
+    new_schema = table1.schema + table2.schema
+
+    # Perform cross join
+    new_rows = []
+    for row1 in table1.rows:
+        for row2 in table2.rows:
+            if condition is None or condition(row1, row2):
+                new_rows.append(row1 + row2)
+
+    return Table(new_schema, new_rows)
