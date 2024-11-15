@@ -320,6 +320,49 @@ def aggregate(table, group_by_columns, aggregates):
 
     return Table(result_schema, result_rows)
 
+def full_outer_join(table1, table2, conditions):
+    """
+    Perform a full outer join between two tables with dictionary-based rows.
+    :param table1: The first Table object.
+    :param table2: The second Table object.
+    :param conditions: List of conditions in the format ("column1", "operator", "column2").
+    :return: A new Table containing the result of the full outer join.
+    """
+    # Extract column names from schemas
+    table1_columns = [col["name"] for col in table1.schema]
+    table2_columns = [col["name"] for col in table2.schema]
+
+    # Merge schemas
+    merged_schema = table1.schema + [col for col in table2.schema if col["name"] not in table1_columns]
+
+    # Track matched rows in table2
+    matched_table2_rows = set()
+
+    # Perform the join
+    joined_rows = []
+    for row1 in table1.rows:
+        matched = False
+        for j, row2 in enumerate(table2.rows):
+            # Check if the rows satisfy the join conditions
+            if all(compare(row1.get(cond[0]), cond[1], row2.get(cond[2])) for cond in conditions):
+                # Merge matching rows
+                merged_row = {**row1, **{col: row2.get(col, None) for col in table2_columns}}
+                joined_rows.append(merged_row)
+                matched = True
+                matched_table2_rows.add(j)  # Mark row2 as matched
+        if not matched:
+            # Add unmatched row1 with NULLs for table2 columns
+            unmatched_row = {col: None for col in table2_columns}
+            joined_rows.append({**row1, **unmatched_row})
+
+    # Add unmatched rows from table2
+    for j, row2 in enumerate(table2.rows):
+        if j not in matched_table2_rows:
+            unmatched_row = {col: None for col in table1_columns}
+            joined_rows.append({**unmatched_row, **row2})
+
+    return Table(merged_schema, joined_rows)
+
 def cross_join(table1, table2, condition=None):
     """
     Perform a cross join between two tables with an optional condition.
@@ -345,3 +388,111 @@ def cross_join(table1, table2, condition=None):
                 new_rows.append(row1 + row2)
 
     return Table(new_schema, new_rows)
+
+
+def aggregate(table, group_by_columns, custom_expressions):
+    """
+    Perform aggregation with custom expressions on a table.
+    :param table: The Table object.
+    :param group_by_columns: List of columns to group by.
+    :param custom_expressions: List of tuples in the format ("result_column", "expression").
+                               Expressions can use Python syntax and reference columns.
+    :return: A new Table containing the aggregated result.
+    """
+    from collections import defaultdict
+
+    # Validate group_by_columns
+    schema_column_names = [col["name"] for col in table.schema]
+    for col in group_by_columns:
+        if col not in schema_column_names:
+            raise ValueError(f"Group by column '{col}' not found in schema.")
+
+    # Group rows by the specified columns
+    grouped_data = defaultdict(list)
+    for row in table.rows:
+        key = tuple(row[col] for col in group_by_columns)
+        grouped_data[key].append(row)
+
+    # Perform aggregation
+    result_rows = []
+    for key, rows in grouped_data.items():
+        # Initialize the aggregated row with group-by columns
+        aggregated_row = {col: val for col, val in zip(group_by_columns, key)}
+
+        # Add custom expression results
+        for result_column, expression in custom_expressions:
+            try:
+                # Prepare evaluation context
+                eval_context = {
+                    col: [row[col] for row in rows if col in row and row[col] is not None]
+                    for col in schema_column_names
+                }
+                # Evaluate the custom expression
+                aggregated_row[result_column] = eval(expression, {}, eval_context)
+            except Exception as e:
+                aggregated_row[result_column] = None  # Handle errors gracefully
+                print(f"Error evaluating expression '{expression}' for '{result_column}': {e}")
+
+        result_rows.append(aggregated_row)
+
+    # Create result schema
+    result_schema = [
+        {"name": col, "desc": f"Grouped by {col}", "type": "grouping"} for col in group_by_columns
+    ] + [
+        {"name": col, "desc": f"Custom expression: {expr}", "type": "aggregate"}
+        for col, expr in custom_expressions
+    ]
+
+    return Table(result_schema, result_rows)
+
+custom_expressions = [
+    ("Total_Sales", "sum(Sales)"),
+    ("Average_Sales", "sum(Sales) / len(Sales)"),
+    ("Color_Count", "len(set(Color))")  # Count distinct colors
+]
+
+table = Table(
+    schema=[
+        {"name": "ID", "desc": "Identifier", "type": "int"},
+        {"name": "Name", "desc": "Item name", "type": "string"},
+        {"name": "Sales", "desc": "Sales count", "type": "int"},
+        {"name": "Color", "desc": "Item color", "type": "string"}
+    ],
+    rows=[
+        {"ID": 1, "Name": "Apple", "Sales": 50, "Color": "Red"},
+        {"ID": 2, "Name": "Banana", "Sales": 40, "Color": "Yellow"},
+        {"ID": 1, "Name": "Apple", "Sales": 30, "Color": "Red"},
+        {"ID": 3, "Name": "Cherry", "Sales": 20, "Color": "Red"},
+        {"ID": 2, "Name": "Banana", "Sales": 60, "Color": "Yellow"}
+    ]
+)
+
+result = aggregate(
+    table,
+    group_by_columns=["ID", "Name"],
+    custom_expressions=custom_expressions
+)
+
+# Print Results
+print("Aggregated Result Schema:")
+print(result.schema)
+
+print("\nAggregated Result Rows:")
+for row in result.rows:
+    print(row)
+
+
+    [
+    {"name": "ID", "desc": "Grouped by ID", "type": "grouping"},
+    {"name": "Name", "desc": "Grouped by Name", "type": "grouping"},
+    {"name": "Total_Sales", "desc": "Custom expression: sum(Sales)", "type": "aggregate"},
+    {"name": "Average_Sales", "desc": "Custom expression: sum(Sales) / len(Sales)", "type": "aggregate"},
+    {"name": "Color_Count", "desc": "Custom expression: len(set(Color))", "type": "aggregate"}
+]
+    
+
+    [
+    {"ID": 1, "Name": "Apple", "Total_Sales": 80, "Average_Sales": 40.0, "Color_Count": 1},
+    {"ID": 2, "Name": "Banana", "Total_Sales": 100, "Average_Sales": 50.0, "Color_Count": 1},
+    {"ID": 3, "Name": "Cherry", "Total_Sales": 20, "Average_Sales": 20.0, "Color_Count": 1}
+]
