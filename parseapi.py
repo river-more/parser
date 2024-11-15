@@ -389,7 +389,6 @@ def cross_join(table1, table2, condition=None):
 
     return Table(new_schema, new_rows)
 
-
 def aggregate(table, group_by_columns, custom_expressions):
     """
     Perform aggregation with custom expressions on a table.
@@ -400,6 +399,15 @@ def aggregate(table, group_by_columns, custom_expressions):
     :return: A new Table containing the aggregated result.
     """
     from collections import defaultdict
+
+    # Helper functions for custom expressions
+    def countRows(column):
+        """Count non-null rows in a column."""
+        return len(column)
+
+    def uniqueValues(column):
+        """Count unique values in a column."""
+        return len(set(column))
 
     # Validate group_by_columns
     schema_column_names = [col["name"] for col in table.schema]
@@ -427,6 +435,8 @@ def aggregate(table, group_by_columns, custom_expressions):
                     col: [row[col] for row in rows if col in row and row[col] is not None]
                     for col in schema_column_names
                 }
+                eval_context.update({"countRows": countRows, "uniqueValues": uniqueValues})
+                
                 # Evaluate the custom expression
                 aggregated_row[result_column] = eval(expression, {}, eval_context)
             except Exception as e:
